@@ -1,0 +1,26 @@
+#######################################
+# Syntax Coloring Map for TFLidar
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+TFLidar	KEYWORD1
+status	KEYWORD1
+version	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin	KEYWORD2
+getData	KEYWORD2
+sendCommand	KEYWORD2
+printStatus	KEYWORD2
+printFrame	KEYWORD2
+printReply	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
