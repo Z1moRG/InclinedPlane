@@ -104,6 +104,7 @@ class DistanceApp:
         # --- Zmienne kontrolne ---
         self.plotting = False       # czy pomiar aktualnie trwa (zapobiega jednoczesnemu uruchomieniu kilku wątków pomiarowych)
         self.stop_requested = False # czy użytkownik zażądał zatrzymania pomiaru
+        self.app_quit_requested = False  # <-- flaga całkowitego zamknięcia aplikacji
         self.current_line = None    # referencja do aktualnie modyfikowanego obiektu linii
 
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app) # gdy użytkownik klika "X" w prawym górnym rogu okna wywoła funkcję zamykania self.quit_app
@@ -134,6 +135,8 @@ class DistanceApp:
         self.fig.canvas.mpl_connect('pick_event', self.on_line_pick)                # kliknięcie w linię wykresu
         self.fig.canvas.mpl_connect('motion_notify_event', self.on_line_drag)       # przeciąganie linii wykresu
         self.fig.canvas.mpl_connect('button_release_event', self.on_line_release)   # puszczenie przycisku myszy
+        # Uruchomienie permanentnego wątku nasłuchu przycisku sprzętowego
+        threading.Thread(target=self.hardware_trigger_loop, daemon=True).start()
         
         # --- Powiązanie Matplotlib z Tkinterem ---
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame) # zamienia wykres Matplotlib w element interfejsu Tkintera
@@ -318,7 +321,9 @@ class DistanceApp:
                 if point is None:
                     continue
                 
-                t_raw, d = point
+                # ZMIANA: Odbieramy 3 wartości, ale zmienną btn_state w trakcie pomiaru ignorujemy.
+                # Dzięki temu pętla nie zrywa serii pomiarowej, a kod się nie wyłoży na liczbie kolumn.
+                t_raw, d, btn_state = point 
                 
                 # Inicjalizacja punktów startowych przy pierwszym poprawnym pakiecedanych
                 if t0 is None:
@@ -384,7 +389,7 @@ class DistanceApp:
             self.root.after(0, lambda: self.time_entry.config(state=tk.NORMAL))  
 
     def _read_serial_line(self):
-        """Odczytuje port szeregowy i zwraca SUROWE wartości (t_raw, d). 
+        """Odczytuje port szeregowy i zwraca SUROWE wartości (t_raw, d) oraz stan przycisku -> (czas, dystans, stan_przycisku). 
         Nie filtruje czasu trwania eksperymentu, jedynie poprawność pakietu i fizyczny zasięg."""
         try:
             if ser.in_waiting == 0:
@@ -399,13 +404,14 @@ class DistanceApp:
                 return None
 
             parts = data.split(',')
-            if len(parts) != 2:
+            if len(parts) != 3: # <-- ZMIANA: oczekujemy 3 elementów
                 return None
                 
             try:
                 # parts[0] to zawsze CZAS, parts[1] to zawsze DYSTANS
                 t_raw = int(parts[0].strip())
                 d = int(parts[1].strip())
+                btn_state = int(parts[2].strip()) # <-- 1 = puszczony, 0 = wciśnięty
             except ValueError:
                 print(f"Pominięto uszkodzone dane: {data}")
                 return None
@@ -420,7 +426,7 @@ class DistanceApp:
                 print(f"Odrzucono anomalny dystans: d={d}cm (Poza zakresem czujnika)")
                 return None
 
-            return t_raw, d
+            return t_raw, d, btn_state
 
         except Exception as e:
             print(f"Chwilowy błąd transmisji: {e}")
@@ -451,6 +457,34 @@ class DistanceApp:
             
         except Exception as e:
             print(f"Chwilowy problem z odświeżeniem płótna: {e}")
+
+    def hardware_trigger_loop(self):
+        """Permanentny wątek nasłuchujący przycisku sprzętowego Arduino. 
+        Uruchamia nowy pomiar wyłącznie, gdy aplikacja jest w stanie spoczynku."""
+        last_btn_state = 1  # 1 oznacza domyślnie puszczony przycisk (INPUT_PULLUP)
+        
+        while not self.app_quit_requested: # Pętla reaguje tylko na wyjście z programu
+            time.sleep(0.010) # 10ms odpoczynku w zupełności wystarczy (częstotliwość 100Hz)
+            
+            # Jeśli trwa aktywny pomiar, ten wątek "śpi" i nie marnuje zasobów procesora,
+            # ponieważ to główna pętla update_plot zarządza teraz odczytem z portu.
+            if self.plotting:
+                continue
+                
+            # Sekcja nasłuchu uruchamia się TYLKO poza aktywnym pomiarem
+            point = self._read_serial_line()
+            if point is not None:
+                _, _, btn_state = point
+                
+                # Wykrywanie ZBOCZA NARASTAJĄCEGO (Przejście z 0 na 1 -> puszczenie przycisku)
+                if last_btn_state == 0 and btn_state == 1:
+                    print("Wykryto zwolnienie blokady! Uruchamianie pomiaru z poziomu Arduino...")
+                    # Bezpieczne wywołanie start_measurement w głównym wątku GUI Tkintera
+                    self.root.after(0, self.start_measurement)
+                
+                # Aktualizacja stanu przycisku do kolejnej iteracji
+                last_btn_state = btn_state
+
 
     def on_line_pick(self, event):
         """1. Wywoływane w momencie kliknięcia lewym przyciskiem myszy w linię."""
@@ -593,6 +627,7 @@ class DistanceApp:
 
     def quit_app(self):
         self.stop_requested = True
+        self.app_quit_requested = True
         try:
             if 'ser' in globals() and ser.is_open:
                 ser.close()

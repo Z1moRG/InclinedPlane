@@ -16,6 +16,13 @@ int16_t distance;
 bool released = false;
 unsigned long previousMillis = 0;
 
+// --- Zmienne do bezblokadowego debouncingu przycisku ---
+int lastButtonState = HIGH;     // Poprzedni odczyt z pinu (INPUT_PULLUP domyślnie daje HIGH)
+int stableButtonState = HIGH;   // Ostateczny, odfiltrowany stan przycisku
+unsigned long lastDebounceTime = 0;  // Znacznik czasu ostatniego drgnięcia styków
+const unsigned long debounceDelay = 20; // Czas filtracji styków w milisekundach
+
+
 void setup()
 {
   Serial.begin(115200);
@@ -30,20 +37,27 @@ void setup()
 
 void loop()
 {
-  released = digitalRead(PIN_BTN);
+  lidar.getData(distance); 
 
-  if (released)
-  {
-    lidar.getData(distance); 
-    if (distance < 600) // lidars have an indoor range of 12m, an outdoor range of 7m 
-    {
-      Serial.print(millis() - previousMillis);
-      Serial.print(",");
-      Serial.println(distance);
+  int currentReading = digitalRead(PIN_BTN);
+  if (currentReading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  // Dopiero gdy stan pinu jest stabilny przez ponad debounceDelay, uznajemy zmianę za prawdziwą
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (currentReading != stableButtonState) {
+      stableButtonState = currentReading;
     }
   }
-  else
+  lastButtonState = currentReading;
+
+  if (distance < 600) 
   {
-    previousMillis = millis();
+    Serial.print(millis());
+    Serial.print(",");
+    Serial.print(distance);
+    Serial.print(",");
+    // Wysyłamy odfiltrowany stan: 1 = puszczony (HIGH), 0 = wciśnięty (LOW)
+    Serial.println(stableButtonState == HIGH ? 1 : 0);
   }
 }
