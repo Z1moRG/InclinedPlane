@@ -51,7 +51,7 @@ void loop()
   }
   lastButtonState = currentReading;
 
-  if (distance < 600) 
+  if (distance < 600) // lidars have an indoor range of 12m, an outdoor range of 7m 
   {
     Serial.print(millis());
     Serial.print(",");

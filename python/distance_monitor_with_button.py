@@ -1,5 +1,5 @@
 DEV_MODE = False # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
-DEV_LM = True # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
+DEV_LM = False # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
 
 if DEV_MODE:
     import serial_dev as serial
@@ -416,7 +416,7 @@ class DistanceApp:
                 print(f"Pominięto uszkodzone dane: {data}")
                 return None
             
-            # Filtr fizycznego zasięgu czujnika LIDAR (np. 2 cm - 499 cm)
+            # Filtr fizycznego zasięgu czujnika LIDAR (np. 2 cm - 500 cm)
             # dostosuj te wartości do czujnika i długości w doświadczeniu (równi pochyłej)
             MIN_DISTANCE = 2    # cm
             MAX_DISTANCE = 500  # cm 
