@@ -1,5 +1,5 @@
-DEV_MODE = True # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
-DEV_LM = True # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
+DEV_MODE = False # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
+DEV_LM = False # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
 
 if DEV_MODE:
     import serial_dev as serial
