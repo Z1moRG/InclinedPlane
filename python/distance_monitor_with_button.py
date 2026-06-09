@@ -1,5 +1,5 @@
-DEV_MODE = False # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
-DEV_LM = False # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
+DEV_MODE = True # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
+DEV_LM = True # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
 
 if DEV_MODE:
     import serial_dev as serial
@@ -20,6 +20,8 @@ import time
 TIME = 60000   # Duration of measurement timeout in ms
 AGGR = 10      # Aggregation window in ms
 BAUD_RATE = 115200
+# Exact 8 colors optimized for distinct comparisons
+COLORS = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
 
 def find_arduino_port():
     """Funkcja realizuje inspekcję sprzętową magistrali USB komputera w celu autonomicznej identyfikacji 
@@ -99,7 +101,7 @@ class DistanceApp:
         # --- Główne okno aplikacji (Tkinter) ---
         self.root = root 
         self.root.title("Distance Measuring System")
-        self.line_colors = iter(['b', 'g', 'r', 'c', 'm', 'y', 'k']) # iterator kolorków (niebieski, zielony, czerwony itd.). Każdy nowy wykres/pomiar dostanie automatycznie kolejny kolor z listy
+        self.line_colors = iter(COLORS) # iterator kolorków (niebieski, zielony, czerwony itd.). Każdy nowy wykres/pomiar dostanie automatycznie kolejny kolor z listy
 
         # --- Zmienne kontrolne ---
         self.plotting = False       # czy pomiar aktualnie trwa (zapobiega jednoczesnemu uruchomieniu kilku wątków pomiarowych)
@@ -222,11 +224,14 @@ class DistanceApp:
 
     
     def start_measurement(self):
+        """Inicjalizuje proces zbierania danych pomiarowych z czujnika LIDAR."""
+        # Sprawdzenie, czy pętla pomiarowa już działa. Jeśli tak, wyświetla komunikat informacyjny i przerywa działanie funkcji.
+        # Chroni to przed przypadkowym wygenerowaniem nieskończonej liczby wątków tła.
         if self.plotting:
             messagebox.showinfo("Measurement", "Measurement already running.")
             return
         
-        # NOWE: Walidacja wprowadzonego czasu trwania pomiaru 
+        # Walidacja wprowadzonego czasu trwania pomiaru 
         try:
             user_time = int(self.time_var.get())
             if user_time <= 0:
@@ -239,49 +244,52 @@ class DistanceApp:
         self.plotting = True
         self.stop_requested = False
 
-        self.start_btn.config(state=tk.DISABLED)
-        self.cease_btn.config(state=tk.NORMAL)
-        self.clear_btn.config(state=tk.DISABLED)  # <-- BLOKADA CZYSZCZENIA
-        self.time_entry.config(state=tk.DISABLED)  # <-- Blokada pola tekstowego podczas pomiaru
+        self.start_btn.config(state=tk.DISABLED)    # BLOKADA STARTU (użytkownik nie może kliknąć "Start measurement" ponownie)
+        self.cease_btn.config(state=tk.NORMAL)      # AKTYWACJA MOŻLIWOŚCI ZATRZYMANIA (użytkownik może kliknąć "Cease measurement")
+        self.clear_btn.config(state=tk.DISABLED)    # BLOKADA CZYSZCZENIA (użytkownik nie może kliknąć "Clear plot")
+        self.time_entry.config(state=tk.DISABLED)   # BLOKADA ZMIANY TIMEOUTu (blokada pola tekstowego podczas pomiaru)
 
         # UTWORZENIE NOWEJ LINII DLA TEGO POMIARU
         try:
             color = next(self.line_colors)
-        except StopIteration:
-            self.line_colors = iter(['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        # gdy wyczerpano kolory z listy, iterator jest automatycznie odnawiany od zera
+        except StopIteration: 
+            self.line_colors = iter(COLORS)
             color = next(self.line_colors)
 
         self.current_line, = self.ax.plot([], [], color=color, label=f"Run {color}", picker=5)
-        self.line_offsets[self.current_line] = 0.0  
-        self.line_offsets_y[self.current_line] = 0.0  # <-- NOWE
+        self.line_offsets[self.current_line] = 0.0      # Inicjalizacja przesunięcia w X na 0
+        self.line_offsets_y[self.current_line] = 0.0    # Inicjalizacja przesunięcia w Y na 0
         self.ax.legend()
 
         threading.Thread(target=self.update_plot, daemon=True).start()
+        # Uruchamia metodę update_plot w osobnym wątku systemowym. 
+        # Flaga daemon=True (wątek demona) oznacza, że zakończenie działania aplikacji głównej (zamknięcie okna) automatycznie i natychmiastowo ubije ten wątek roboczy, eliminując ryzyko wiszenia procesu w pamięci RAM komputera.
 
     def cease_measurement(self):
+        """Odpowiada za asynchroniczne, programowe przerwanie pętli pomiarowej. Nie zatrzymuje wątku w sposób agresywny. 
+        Zamiast tego wątek roboczy update_plot przy najbliższej iteracji wyjdzie z pętli"""
         self.stop_requested = True
-        self.cease_btn.config(state=tk.DISABLED)
-
-    def toggle_autoscroll(self):
-        """Resetuje tryb nawigacji toolbara, jeśli użytkownik ponownie włącza Auto-scroll."""
-        if self.autoscroll_var.get():
-            # Jeśli była włączona lupa lub rączka na toolbarze - wyłączamy ją
-            if self.toolbar.mode:
-                self.toolbar.mode = ""
-                self._refresh_canvas([], []) # Wymuszenie odświeżenia stanu wewnętrznego
+        self.cease_btn.config(state=tk.DISABLED) # uniemożliwia ponowne kliknięcie "Cease measurement"
 
     def update_plot(self):
         """Pancerna pętla pomiarowa odporna na przerwy w transmisji i anomalie.
         Czas trwania eksperymentu jest kontrolowany przez niezależny zegar systemowy komputera."""
         
-        # --- AGRESYWNE ODRZUCANIE DANYCH HISTORYCZNYCH (FLUSH & PURGE) ---
+        # AGRESYWNE ODRZUCANIE DANYCH HISTORYCZNYCH (FLUSH & PURGE)
         try:
+            # W tej komunikacji istnieją dwa niezależne bufory sprzętowe/systemowe:
+            # Bufor odbiornika (w komputerze/Pythonie)
+            # Bufor nadajnika (w Arduino)
             ser.reset_input_buffer()
             ser.reset_output_buffer()
+            # Czyszczenie bufora po stronie Pythona (reset_input_buffer()) może okazać się niewystarczające
+            # Gdy wywołasz ser.reset_input_buffer(), komputer błyskawicznie opróżnia twój lokalny bufor. Jednak Arduino w tej samej milisekundzie nadal przesyła kolejne bajty przez kabel USB.
             
             # Pętla czyta wszystko, co zalega w pamięci podręcznej FIFO i sterownikach OS,
             # dopóki port szeregowy nie zostanie całkowicie opróżniony (in_waiting == 0).
             # Dajemy systemowi 100ms na zebranie i wyrzucenie wszystkich starych pakietów.
+            # TODO: można zamiast agresywnego czyszczenia zaimplementować komunikację typu Zapytanie-Odpowiedź
             start_flush = time.time()
             while ser.in_waiting > 0 or (time.time() - start_flush < 0.100):
                 if ser.in_waiting > 0:
@@ -304,7 +312,7 @@ class DistanceApp:
         while not self.stop_requested:
             time.sleep(0.005)
 
-            # === GWARANCJA AUTOMATYCZNEGO STOPU ===
+            # === GWARANCJA AUTOMATYCZNEGO STOPU (po dt > timeout) ===
             # Jeśli pomiar już wystartował (mamy czas t0), sprawdzamy zegar komputera.
             # Zapobiega to zapętleniu, nawet jeśli czujnik na koniec zgubi zasięg i zwraca None.
             if start_system_time is not None:
@@ -317,15 +325,15 @@ class DistanceApp:
                 point = self._read_serial_line()
                 
                 # Jeśli funkcja zwróciła None (brak danych lub zły dystans), 
-                # przechodzimy do kolejnej iteracji, ale zegar systemowy na górze pętli i tak nas rozliczy!
+                # przechodzimy do kolejnej iteracji, ale zegar systemowy na górze pętli działa niezależnie
                 if point is None:
                     continue
                 
-                # ZMIANA: Odbieramy 3 wartości, ale zmienną btn_state w trakcie pomiaru ignorujemy.
+                # Odbieramy 3 wartości, ale zmienną btn_state w trakcie pomiaru ignorujemy.
                 # Dzięki temu pętla nie zrywa serii pomiarowej, a kod się nie wyłoży na liczbie kolumn.
                 t_raw, d, btn_state = point 
                 
-                # Inicjalizacja punktów startowych przy pierwszym poprawnym pakiecedanych
+                # Inicjalizacja punktów startowych przy pierwszym poprawnym pakiecie danych
                 if t0 is None:
                     t0 = t_raw
                     start_system_time = time.time()  # Rusza niezależny stoper komputera
@@ -334,7 +342,7 @@ class DistanceApp:
                 t = t_raw - t0
 
                 # FILTR ANOMALII CZASU: 
-                # Odrzucamy tylko ewidentne błędy bitowe transmisji (np. ujemny czas lub totalny kosmos),
+                # Odrzucamy tylko ewidentne błędy bitowe transmisji (np. ujemny czas lub czas znacząco wykraczający poza oczekiwany zakres),
                 # ale pozwalamy czasowi płynąć naturalnie dalej w przedziale pomiarowym.
                 if t < 0 or t > self.current_timeout * 2.0:
                     print(f"Odrzucono anomalny czas z Arduino: t={t}ms (surowy t_raw={t_raw}) t0 = {t0}")
@@ -349,6 +357,8 @@ class DistanceApp:
                     last_draw_time = now
                     times, distances = aggregate_data(raw_ts, raw_ds)
                     
+                    # opcjonalne zerowanie wykresu (początek osi na zerze) tuż przed jego wyświetleniem na ekranie. 
+                    # Decyduje o tym, czy wykres ma pokazywać wartości surowe, czy wartości liczone od zera.
                     if self.align_zero_var.get() and times:
                         t_start = times[0]
                         d_start = distances[0]
@@ -371,6 +381,7 @@ class DistanceApp:
         try:
             if raw_ts:
                 times, distances = aggregate_data(raw_ts, raw_ds)
+                # opcjonalne zerowanie wykresu
                 if self.align_zero_var.get() and times:
                     t_start = times[0]
                     d_start = distances[0]
@@ -392,32 +403,37 @@ class DistanceApp:
         """Odczytuje port szeregowy i zwraca SUROWE wartości (t_raw, d) oraz stan przycisku -> (czas, dystans, stan_przycisku). 
         Nie filtruje czasu trwania eksperymentu, jedynie poprawność pakietu i fizyczny zasięg."""
         try:
+            # Sprawdza, czy w buforze sprzętowym systemu operacyjnego znajdują się jakiekolwiek nieprzeczytane bajty. 
+            # Zapobiega to blokowaniu wątku na operacji odczytu.
             if ser.in_waiting == 0:
                 return None
 
+            # pobiera strumień aż do napotkania znaku końca linii \n
             data_bytes = ser.readline()
             if not data_bytes:
                 return None
 
+            # transformuje bajty do formatu tekstowego UTF-8, ignorując uszkodzone znaki powstałe w wyniku zakłóceń elektromagnetycznych (EMI), 
+            # oraz obcina znaki niedrukowalne (\r, \n).
             data = data_bytes.decode(errors='ignore').strip()
             if not data or ',' not in data:
                 return None
 
             parts = data.split(',')
-            if len(parts) != 3: # <-- ZMIANA: oczekujemy 3 elementów
+            if len(parts) != 3: # oczekujemy 3 elementów (czas, dystans, stan_przycisku)
                 return None
                 
             try:
-                # parts[0] to zawsze CZAS, parts[1] to zawsze DYSTANS
+                # parts[0] to zawsze CZAS, parts[1] to zawsze DYSTANS, parts[2] to zawsze STAN PRZYCISKU
                 t_raw = int(parts[0].strip())
                 d = int(parts[1].strip())
-                btn_state = int(parts[2].strip()) # <-- 1 = puszczony, 0 = wciśnięty
+                btn_state = int(parts[2].strip()) # 1 = puszczony, 0 = wciśnięty
             except ValueError:
                 print(f"Pominięto uszkodzone dane: {data}")
                 return None
             
             # Filtr fizycznego zasięgu czujnika LIDAR (np. 2 cm - 500 cm)
-            # dostosuj te wartości do czujnika i długości w doświadczeniu (równi pochyłej)
+            # TODO: dostosuj te wartości do czujnika i długości w doświadczeniu (równi pochyłej)
             MIN_DISTANCE = 2    # cm
             MAX_DISTANCE = 500  # cm 
             # UWAGA: zmiana zakresu zmiennej MAX_DISTANCE jest niewystarczająca; trzeba również
@@ -434,10 +450,14 @@ class DistanceApp:
 
     def _refresh_canvas(self, times, distances):
         """Aktualizuje linię wykresu w głównym wątku Tkintera."""
+        # Jeśli jest brak nowych danych lub linia wykresu nie została jeszcze utworzona, funkcja natychmiast przerywa działanie.
         if not times or self.current_line is None:
             return
 
         try:
+            # geometrycznym przesuwaniem wykresu w locie
+            # sprawdzenie czy użytkownik przesunął wcześniej linię myszką w poziomie lub w pionie. 
+            # Jeśli tak, to do każdej nowej współrzędnej czasu X oraz odległości Y pobranej z Arduino automatycznie dodawana jest wartość tego przesunięcia. 
             offset_x = self.line_offsets.get(self.current_line, 0.0)
             offset_y = self.line_offsets_y.get(self.current_line, 0.0) 
             shifted_times = [x + offset_x for x in times]
@@ -445,11 +465,14 @@ class DistanceApp:
             
             self.current_line.set_data(shifted_times, shifted_distances) 
 
-            # Przemieszczanie kamery zależy teraz wyłącznie od zaznaczonego checkboxa
+            # Przemieszczanie kamery zależy od zaznaczonego checkboxa
+            # Sprawdza najmniejszą oraz największą odległość zarejestrowaną w obecnej serii i oblicza bezpieczny margines pionowy (minimum 5 centymetrów lub 10% całego zakresu ruchu). 
             if self.autoscroll_var.get():
                 min_d, max_d = min(distances), max(distances)
                 margin = max(5, (max_d - min_d) * 0.1)
-                
+
+                # Automatycznie docina granice osi pionowej (odległość) oraz poziomej (czas od pierwszego do ostatniego punktu).    
+                # Powoduje to, że wykres samoczynnie przesuwa się w prawo i dopasowuje do wysokości ruchu, dzięki czemu czoło rysowanej linii jest zawsze idealnie widoczne na ekranie. 
                 self.ax.set_xlim(times[0], times[-1])
                 self.ax.set_ylim(min_d - margin, max_d + margin)
 
@@ -457,6 +480,17 @@ class DistanceApp:
             
         except Exception as e:
             print(f"Chwilowy problem z odświeżeniem płótna: {e}")
+
+    def toggle_autoscroll(self):
+        """Resetuje tryb nawigacji toolbara, jeśli użytkownik ponownie włącza Auto-scroll."""
+        # Pasek narzędzi pod wykresem (toolbar) ma własną logikę działania. Kiedy klikasz na lupę lub rączkę, Matplotlib wchodzi w wewnętrzny tryb interakcji i "zamraża" osie, aby użytkownik mógł swobodnie badać wykres.
+        # Jeśli w tym samym czasie zaznaczysz opcję Auto-scroll, funkcja odświeżająca wykres (_refresh_canvas) spróbuje siłą przesunąć kamerę za jadącym wózkiem. 
+        # W efekcie program dostawał sprzeczne instrukcje (toolbar chciał trzymać widok lupy, a Auto-scroll chciał go przesunąć), co powodowało, że automatyczne śledzenie całkowicie się blokowało i przestawało działać nawet po odznaczeniu lupy.
+        if self.autoscroll_var.get():
+            # Jeśli była włączona lupa lub rączka na toolbarze - wyłączamy ją
+            if self.toolbar.mode:
+                self.toolbar.mode = ""
+                self._refresh_canvas([], []) # Wymuszenie odświeżenia stanu wewnętrznego
 
     def hardware_trigger_loop(self):
         """Permanentny wątek nasłuchujący przycisku sprzętowego Arduino. 
@@ -485,14 +519,14 @@ class DistanceApp:
                 # Aktualizacja stanu przycisku do kolejnej iteracji
                 last_btn_state = btn_state
 
-
     def on_line_pick(self, event):
-        """1. Wywoływane w momencie kliknięcia lewym przyciskiem myszy w linię."""
+        """Wywoływane w momencie kliknięcia lewym przyciskiem myszy w linię.
+        Odpowiada za poprawną inicjalizację trybu przesuwania."""
         # Ignorujemy próby przesuwania w trakcie trwania aktywnego pomiaru
         if self.plotting:
             return
         
-        # Reagujemy TYLKO na lewy przycisk myszy (button == 1) ---
+        # Reagujemy TYLKO na lewy przycisk myszy (button == 1) 
         if event.mouseevent.button != 1:
             return
 
@@ -500,11 +534,11 @@ class DistanceApp:
         if self.selected_line is not None:
             self.selected_line.set_linewidth(1.5)
 
-        # Przejęcie nowej linii i pogrubienie jej w celach wizualnych
+        # Przejęcie nowej linii i pogrubienie jej w celach wizualnych (sygnał na ekranie, która seria pomiarowa została wybrana do edycji)
         self.selected_line = event.artist
         self.selected_line.set_linewidth(2.0)
         
-        # Zapamiętanie współrzędnej X wykresu, na której stał kursor w chwili kliknięcia
+        # Zapamiętanie współrzędnych X i Y wykresu, na których stał kursor w chwili kliknięcia
         self.press_x = event.mouseevent.xdata
         self.press_y = event.mouseevent.ydata  
         self.is_dragging = True
@@ -513,7 +547,7 @@ class DistanceApp:
         print(f"Chwycono serię: {self.selected_line.get_label()}")
         
     def on_line_drag(self, event):
-        """2. Wywoływane przy każdym ruchu myszy nad obszarem wykresu."""
+        """Wywoływane przy każdym ruchu myszy nad obszarem wykresu."""
         if not self.is_dragging or self.selected_line is None or event.xdata is None or self.press_x is None or event.ydata is None or self.press_y is None: 
             return
 
@@ -522,18 +556,22 @@ class DistanceApp:
         if dx == 0 and dy == 0: 
             return
 
+        # Nadpisujemy stary punkt kliknięcia aktualną pozycją myszy. Dzięki temu przy kolejnym minimalnym ruchu myszy (za ułamek sekundy), 
+        # dx i dy będą liczone od obecnego miejsca, a nie od miejsca, gdzie kliknięto na samym początku. To zapewnia płynność ruchu.
         self.press_x = event.xdata
         self.press_y = event.ydata 
 
         self.line_offsets[self.selected_line] = self.line_offsets.get(self.selected_line, 0.0) + dx
         self.line_offsets_y[self.selected_line] = self.line_offsets_y.get(self.selected_line, 0.0) + dy 
 
+        # Pobieramy z Matplotlib aktualne tablice współrzędnych (wszystkie punkty X i Y), z których narysowana jest wybrana linia.
+        # Przechodzimy przez każdy punkt na linii i dodajemy do niego nasze przesunięcie (dx i dy).
         x_data, y_data = self.selected_line.get_data()
         new_x = [x + dx for x in x_data]
         new_y = [y + dy for y in y_data] 
         self.selected_line.set_data(new_x, new_y) 
 
-        # --- AKTUALIZACJA WSKAŹNIKA W LEGENDACH NA ŻYWO ---
+        # AKTUALIZACJA WSKAŹNIKA W LEGENDACH NA ŻYWO 
         lbl_x = self.line_offsets[self.selected_line]
         lbl_y = self.line_offsets_y[self.selected_line]
         
@@ -550,13 +588,13 @@ class DistanceApp:
         if self.toolbar.mode:
             return
         
-        # Odznaczamy linię TYLKO przy kliknięciu LEWYM przyciskiem myszy w tło ---
+        # Odznaczamy linię TYLKO przy kliknięciu LEWYM przyciskiem myszy w tło
         if event.button != 1:
             return
 
         # Sprawdzamy, czy kliknięcie nie pochodzi z 'pick_event' (czyli czy kliknięto w tło)
         # Matplotlib przy trafnym kliknięciu w linię najpierw wywołuje on_line_pick, a potem to zdarzenie.
-        # Jeśli kliknięto w puste tło, is_dragging będzie równe False.
+        # Jeśli kliknięto w puste tło, is_dragging będzie równe False (odpowiada za to funkcja on_line_release).
         if not self.is_dragging and self.selected_line is not None:
             self.selected_line.set_linewidth(1.5) # Powrót do cienkiej linii
             self.selected_line = None
@@ -564,30 +602,42 @@ class DistanceApp:
             print("Odznaczono serię pomiarową.")
 
     def on_line_release(self, event):
-        """3. Wywoływane w momencie puszczenia przycisku myszy."""
+        """Wywoływane w momencie puszczenia przycisku myszy."""
         if self.is_dragging:
             self.is_dragging = False
             self.press_x = None
-            self.press_y = None # 
-            print(f"Upuszczono serię na pozycji offsetu: {self.line_offsets.get(self.selected_line, 0.0):.1f} ms")
+            self.press_y = None 
+            print(f"Upuszczono serię na pozycji offsetu: {self.line_offsets.get(self.selected_line, 0.0):.1f} ms, {self.line_offsets_y.get(self.selected_line, 0.0):.1f} cm")
 
     def change_scale(self, event):
         """Obsługa przybliżania i oddalania wykresu rolką myszy."""
+        # Sprawdzamy, czy kursor myszy znajduje się bezpośrednio nad obszarem osi wykresu
         if event.inaxes != self.ax: 
             return  
         
+        # zapisujemy współrzędne na wykresie, w których stoi kursor w momencie obrotu rolki
         xdata, ydata = event.xdata, event.ydata
+        # pobieramy aktualne limity (zakresy) osi X i Y, krotki zawierające wartości [lewa, prawa] oraz [dolna, górna]
         cur_xlim = self.ax.get_xlim()
         cur_ylim = self.ax.get_ylim()
 
-        base_scale = 1.5
+        base_scale = 1.5    # bazowy współczynnik zmiany widoku
+        # Matplotlib przekazuje ruch rolki w górę jako 'up' (przybliżanie), a w dół jako 'down' (oddalanie).
         scale_factor = 1 / base_scale if event.button == 'up' else base_scale
 
+        # Kod dzieli aktualny widok na cztery odcinki, mierzone od pozycji kursora do krawędzi wykresu, a następnie mnoży je przez scale_factor:
+        # new_width: Nowa odległość od kursora do prawej krawędzi osi X.
+        # new_left: Nowa odległość od kursora do lewej krawędzi osi X.
+        # new_height: Nowa odległość od kursora do górnej krawędzi osi Y.
+        # new_bottom: Nowa odległość od kursora do dolnej krawędzi osi Y.
+        # Dzięki przemnożeniu wszystkich czterech stron osobnym wektorem relatywnie do pozycji myszy, punkt pod kursorem pozostanie nienaruszony (nie ucieknie z ekranu).
         new_width = (cur_xlim[1] - xdata) * scale_factor
         new_left = (xdata - cur_xlim[0]) * scale_factor
         new_height = (cur_ylim[1] - ydata) * scale_factor
         new_bottom = (ydata - cur_ylim[0]) * scale_factor
 
+        # Ustala nowe oficjalne granice wykresu. Lewa krawędź to pozycja kursora minus nowa odległość lewa, 
+        # prawa to pozycja kursora plus nowa odległość prawa (analogicznie dla osi Y).
         self.ax.set_xlim([xdata - new_left, xdata + new_width])
         self.ax.set_ylim([ydata - new_bottom, ydata + new_height])
         self.canvas.draw_idle()
@@ -614,9 +664,11 @@ class DistanceApp:
         self.ax.set_xlim(0, 10)
         self.ax.set_ylim(0, 10)
         self.canvas.draw_idle()
-        self.line_colors = iter(['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+        self.line_colors = iter(COLORS)
 
     def save_plot(self):
+        """Dodaje obsługę dedykowanego przycisku Save Plot bezpośrednio w panelu sterowania aplikacji. 
+        Ta funkcja pod względem czysto technicznym dubluje możliwość zapisu, ponieważ fabryczny pasek narzędzi Matplotlib (toolbar) posiada już własną ikonkę dyskietki, która realizuje dokładnie to samo zadanie."""
         file_path = filedialog.asksaveasfilename(
             defaultextension='.png',
             filetypes=[('PNG', '*.png'), ('JPEG', '*.jpg'), ('All files', '*.*')]
@@ -626,8 +678,12 @@ class DistanceApp:
             messagebox.showinfo("Save", f"Plot saved to {file_path}")
 
     def quit_app(self):
+        """Odpowiada za bezpieczne zamknięcie aplikacji oraz prawidłowe nawiązanie i zakończenie połączenia szeregowego (RS-232 / UART)"""
+        # Zamykamy wątki działające w tle.
         self.stop_requested = True
         self.app_quit_requested = True
+        # Zamykamy połączenie i zwalniamy port w systemie operacyjnym. Jeśli program zapomniałby zamknąć portu, system mógłby go zablokować
+        # i ponowne uruchomienie aplikacji zgłosiłoby błąd dostępu.
         try:
             if 'ser' in globals() and ser.is_open:
                 ser.close()

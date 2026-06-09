@@ -3,7 +3,7 @@ import time
 import threading
 
 """
-Symulator połączenia szeregowego z projektem Kuby.
+Symulator połączenia szeregowego.
 Pozwala na pracę z GUI bez potrzeby korzystania z fizycznej płytki Arduino.
 Symulator generuje odległość za pomocą funkcji logistycznej, co nie jest realistyczne, ale na potrzeby projektu starcza.
 """
@@ -31,6 +31,12 @@ class Serial:
         self.last_update = time.time_ns()/1_000_000
         self.thread = threading.Thread(target=self.dev_update, daemon=True).start()
 
+    @property
+    def in_waiting(self):
+        """Zwraca liczbę bajtów dostępnych do natychmiastowego odczytu w buforze."""
+        if not self.is_open:
+            raise SerialException("Serial port is closed.")
+        return sum(len(line) for line in self.lines)
 
     def close(self):
         self.is_open = False
@@ -68,7 +74,8 @@ class Serial:
 
             t = int(self.current_time)
             d = int(distance(self.current_time))
-            self.lines.append(f"{t},{d}")
+            btn_state = 0 # stale rozłączony '0'
+            self.lines.append(f"{t},{d},{btn_state}\r\n")
 
             time.sleep(0.01)
 

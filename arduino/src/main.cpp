@@ -7,7 +7,7 @@
 // black wire (lidar sensor) - GND
 
 #define LIDAR_SERIAL mySerial
-#define PIN_BTN 4
+#define PIN_BTN 12
 
 SoftwareSerial mySerial(10, 11);
 TFLidar lidar;

@@ -1,4 +1,4 @@
-DEV_MODE = False # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
+DEV_MODE = True # przekazuje fikcyjną ścieżkę do wirtualnego modułu symulacyjnego (dla testów bez płytki arduino)
 DEV_LM = False # wymusza ścieżkę /dev/ttyACM0 (ustaw ręcznie ścieżkę gdy find_arduino_port() nie jest wstanie znaleźć portu z płtyką Arduino)
 
 if DEV_MODE:
@@ -318,7 +318,8 @@ class DistanceApp:
                 if point is None:
                     continue
                 
-                t_raw, d = point
+                # Odbieramy 3 wartości, ale zmienną btn_state w trakcie pomiaru ignorujemy.
+                t_raw, d, btn_state = point
                 
                 # Inicjalizacja punktów startowych przy pierwszym poprawnym pakiecedanych
                 if t0 is None:
@@ -399,13 +400,14 @@ class DistanceApp:
                 return None
 
             parts = data.split(',')
-            if len(parts) != 2:
+            if len(parts) != 3:
                 return None
                 
             try:
                 # parts[0] to zawsze CZAS, parts[1] to zawsze DYSTANS
                 t_raw = int(parts[0].strip())
                 d = int(parts[1].strip())
+                btn_state = int(parts[2].strip()) # czytamy stan guzika, ale go ignorujemy 
             except ValueError:
                 print(f"Pominięto uszkodzone dane: {data}")
                 return None
@@ -420,7 +422,7 @@ class DistanceApp:
                 print(f"Odrzucono anomalny dystans: d={d}cm (Poza zakresem czujnika)")
                 return None
 
-            return t_raw, d
+            return t_raw, d, btn_state
 
         except Exception as e:
             print(f"Chwilowy błąd transmisji: {e}")
