@@ -117,11 +117,12 @@ Repozytorium projektu zostało zorganizowane w logiczną strukturę modułową, 
     \begin{itemize}
         \item \texttt{distance\_monitor.py} -- Podstawowa wersja programu monitorującego z graficznym interfejsem użytkownika (GUI). 
         \item \texttt{distance\_monitor\_with\_button.py} -- Główna i pełna wersja programu.
+        \item \texttt{distance\_monitor\_low\_latency\_with\_button.py} -- Specjalistyczna, docelowa wersja aplikacji zoptymalizowana pod kątem redukcji opóźnień w systemach operacyjnych z rodziny Windows. 
         \item \texttt{serial\_dev.py} -- Program testowy. Udaje podłączone Arduino i wysyła sztuczne dane, co pozwala testować wygląd wykresu na komputerze bez podłączania prawdziwego sprzętu.
+        \item \texttt{serial\_dev\_harmonics.py} (pełni podobną funkcję do \texttt{serial\_dev.py})
     \end{itemize}
 \end{itemize}
 
-\newpage
 \begin{figure}[ht]
 \centering
 \begin{minipage}{0.6\textwidth} % Keeps the tree neatly aligned
@@ -152,6 +153,7 @@ Repozytorium projektu zostało zorganizowane w logiczną strukturę modułową, 
 .2 python.
 .3 distance\_monitor.py.
 .3 distance\_monitor\_with\_button.py.
+.3 distance\_monitor\_low\_latency\_with\_button.py
 .3 serial\_dev.py.
 .3 serial\_dev\_harmonics.py.
 }
@@ -188,7 +190,7 @@ Aby przygotować część sprzętową do pracy, należy wykonać następujące k
 
 \begin{enumerate}
     \item Podłączyć Arduino do komputera za pomocą standardowego kabla \texttt{USB}. Komputer powinien automatycznie wykryć urządzenie i przypisać mu odpowiedni port komunikacyjny (\texttt{COM} na systemie \texttt{Windows} lub \texttt{ttyACM/ttyUSB} na systemie \texttt{Linux}).
-    \item Sprawdzić poprawność podłączenia wszystkich pinów. Czujnik laserowy \texttt{LIDAR} musi mieć prawidłowo wpięte cztery przewody: zasilanie do pinu \texttt{5V}, masę do pinu \texttt{GND}, oraz kable sygnałowe (zielony i biały) odpowiednio do pinów 10 i 11 mikrokontrolera. Dodatkowo fizyczny przycisk startowy musi być połączony z pinem 4 oraz masą (\texttt{GND}). Złe połączenie lub luźne kable spowodują, że program nie odbierze danych z lasera lub nie zareaguje na puszczenie wózka.
+    \item Sprawdzić poprawność podłączenia wszystkich pinów. Czujnik laserowy \texttt{LIDAR} musi mieć prawidłowo wpięte cztery przewody: zasilanie do pinu \texttt{5V}, masę do pinu \texttt{GND}, oraz kable sygnałowe (zielony i biały) odpowiednio do pinów 10 i 11 mikrokontrolera. Dodatkowo fizyczny przycisk startowy musi być połączony z pinem 12 oraz masą (\texttt{GND}). Złe połączenie lub luźne kable spowodują, że program nie odbierze danych z lasera lub nie zareaguje na puszczenie wózka.
     \item Upewnić się, czy oprogramowanie jest wgrane na płytkę. Jeśli jest to nowe \texttt{Arduino}, zawartość plików została zmieniona lub czujnik nie wysyła danych, należy otworzyć program \texttt{Arduino IDE} i ponownie wgrać program na płytkę.
 \end{enumerate}
 
@@ -506,7 +508,7 @@ if t < 0 or t > self.current_timeout * 2.0:
         11 (TX) & TFmini Plus - Pin RX (Biały) & Cyfrowa linia nadawania danych (UART). \\ 
         GND     & TFmini Plus - Pin GND         & Wspólna masa (uziemienie) układu. \\ 
         5V      & TFmini Plus - Pin VCC         & Szyna zasilania sensora laserowego. \\ 
-        4       & Przycisk (Styk A)             & Sygnał wejściowy (funkcja \texttt{INPUT\_PULLUP}). \\ 
+        12       & Przycisk (Styk A)             & Sygnał wejściowy (funkcja \texttt{INPUT\_PULLUP}). \\ 
         GND     & Przycisk (Styk B)             & Zwarcie pinu do masy po wciśnięciu. \\ 
         \bottomrule
     \end{tabularx}

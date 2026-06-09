@@ -37,6 +37,7 @@ InclinedPlane
 └─ python
    ├─ distance_monitor.py              # Baseline plotting and serial interface script
    ├─ distance_monitor_with_button.py  # Fully featured production GUI app (Drag & Drop, Timeout)
+   ├─ distance_monitor_low_latency_with_button.py   # Production GUI app optimized for Windows OS; utilizes a cascade buffer-flushing loop to eliminate serial latency without any data loss or curve distortion
    └─ serial_dev.py                    # Virtual serial port emulator for offline development
 ```
 
@@ -50,7 +51,7 @@ InclinedPlane
     *   *(White) wire (RX)* $\rightarrow$ Arduino Pin 11 (SoftwareSerial TX)
     *   *(Red) wire* $\rightarrow$ 5V
     *   *(Black) wire* $\rightarrow$ GND
-*   **Physical Button:** Connected between Arduino Pin 4 and GND (`INPUT_PULLUP`).
+*   **Physical Button:** Connected between Arduino Pin 12 and GND (`INPUT_PULLUP`).
 
 ---
 
